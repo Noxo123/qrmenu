@@ -12,19 +12,22 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+
       - name: Install dependencies
         run: npm install
+
       - name: Syntax check
         run: |
           node --check server.js
           node --check src/db.js
           node --check src/openapi.js
+
       - name: Start server
         env:
           NODE_ENV: test
@@ -35,9 +38,15 @@ jobs:
         run: |
           node server.js > server.log 2>&1 &
           echo $! > server.pid
-          for i in {1..20}; do curl -fsS http://127.0.0.1:3000/api/v1/health && exit 0; sleep 1; done
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:3000/api/v1/health; then
+              exit 0
+            fi
+            sleep 1
+          done
           cat server.log
           exit 1
+
       - name: Swagger smoke test
         run: |
           curl -fsS http://127.0.0.1:3000/api-docs/openapi.json | grep 'QRMenu API'
