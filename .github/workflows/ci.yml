@@ -1,0 +1,44 @@
+name: QRMenu CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm install
+      - name: Syntax check
+        run: |
+          node --check server.js
+          node --check src/db.js
+          node --check src/openapi.js
+      - name: Start server
+        env:
+          NODE_ENV: test
+          PORT: 3000
+          BASE_URL: http://localhost:3000
+          SESSION_SECRET: ci-test-secret
+          DB_PATH: ./ci.sqlite
+        run: |
+          node server.js > server.log 2>&1 &
+          echo $! > server.pid
+          for i in {1..20}; do curl -fsS http://127.0.0.1:3000/api/v1/health && exit 0; sleep 1; done
+          cat server.log
+          exit 1
+      - name: Swagger smoke test
+        run: |
+          curl -fsS http://127.0.0.1:3000/api-docs/openapi.json | grep 'QRMenu API'
+          curl -fsS http://127.0.0.1:3000/api-docs | grep 'swagger-ui'
