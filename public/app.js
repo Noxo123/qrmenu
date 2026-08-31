@@ -1,301 +1,39 @@
 async function api(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {})
-    }
-  });
+  const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || 'Une erreur est survenue');
+  if (!response.ok) throw new Error(data.error || `Erreur HTTP ${response.status}`);
   return data;
 }
-
-function esc(value) {
-  return String(value ?? '').replace(/[&<>"']/g, function (char) {
-    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-    return map[char];
-  });
+function esc(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[c])); }
+function toast(message) { document.querySelector('.toast')?.remove(); const e=document.createElement('div'); e.className='toast'; e.textContent=message; document.body.appendChild(e); setTimeout(()=>e.remove(),2600); }
+async function loadMe(){ return api('/api/me'); }
+function ensureModal(){
+  if(document.getElementById('qrModal')) return;
+  const s=document.createElement('style'); s.textContent=`#qrModal{position:fixed;inset:0;background:rgba(15,23,42,.5);display:none;align-items:center;justify-content:center;padding:20px;z-index:9999}#qrModal.open{display:flex}.qr-modal-box{width:min(520px,100%);background:#fff;border-radius:20px;padding:24px;box-shadow:0 20px 70px rgba(0,0,0,.2)}.qr-modal-box h3{margin:0 0 18px}.qr-modal-box label{display:block;font-size:13px;font-weight:700;margin:12px 0 6px}.qr-modal-box input,.qr-modal-box textarea{width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #d9dee7;border-radius:10px;font:inherit}.qr-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}.qr-modal-error{color:#c0392b;font-size:13px;margin-top:8px}`; document.head.appendChild(s);
+  const m=document.createElement('div'); m.id='qrModal'; m.innerHTML='<div class="qr-modal-box" role="dialog" aria-modal="true"><h3 id="qrModalTitle"></h3><div id="qrModalBody"></div><div class="qr-modal-error" id="qrModalError"></div><div class="qr-modal-actions"><button type="button" class="btn light" id="qrModalCancel">Annuler</button><button type="button" class="btn green" id="qrModalOk">Confirmer</button></div></div>'; document.body.appendChild(m);
+  m.addEventListener('click',e=>{if(e.target===m) closeModal();}); document.getElementById('qrModalCancel').onclick=closeModal; document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
 }
-
-function toast(message) {
-  document.querySelector('.toast')?.remove();
-  const element = document.createElement('div');
-  element.className = 'toast';
-  element.textContent = message;
-  document.body.appendChild(element);
-  setTimeout(() => element.remove(), 2600);
+function closeModal(){document.getElementById('qrModal')?.classList.remove('open');}
+function modalForm(title, fields, confirmText='Enregistrer'){
+  ensureModal(); const m=document.getElementById('qrModal'), body=document.getElementById('qrModalBody'); document.getElementById('qrModalTitle').textContent=title; document.getElementById('qrModalOk').textContent=confirmText; document.getElementById('qrModalError').textContent='';
+  body.innerHTML=fields.map(f=>`<label>${esc(f.label)}${f.type==='checkbox'?'':'<input id="modal_'+esc(f.key)+'" type="'+(f.type||'text')+'" value="'+esc(f.value??'')+'" placeholder="'+esc(f.placeholder||'')+'">'}${f.type==='checkbox'?'<input id="modal_'+esc(f.key)+'" type="checkbox" '+(f.value?'checked':'')+'>' : ''}</label>`).join(''); m.classList.add('open'); const first=body.querySelector('input'); first?.focus();
+  return new Promise(resolve=>{const ok=document.getElementById('qrModalOk'); const cancel=document.getElementById('qrModalCancel'); const finish=v=>{ok.onclick=null;cancel.onclick=closeModal;closeModal();resolve(v)}; ok.onclick=()=>{const out={};fields.forEach(f=>{const el=document.getElementById('modal_'+f.key);out[f.key]=f.type==='checkbox'?el.checked:el.value});finish(out)}; cancel.onclick=()=>finish(null);});
 }
-
-async function loadMe() {
-  return api('/api/me');
+async function modalConfirm(title,message,confirmText='Supprimer'){
+  ensureModal(); const m=document.getElementById('qrModal'); document.getElementById('qrModalTitle').textContent=title; document.getElementById('qrModalBody').innerHTML='<p style="margin:0;line-height:1.5">'+esc(message)+'</p>'; document.getElementById('qrModalError').textContent=''; document.getElementById('qrModalOk').textContent=confirmText; m.classList.add('open');
+  return new Promise(resolve=>{const ok=document.getElementById('qrModalOk'),cancel=document.getElementById('qrModalCancel');ok.onclick=()=>{closeModal();resolve(true)};cancel.onclick=()=>{closeModal();resolve(false)}});
 }
-
-async function dashboard() {
-  const result = await loadMe();
-  const user = result.user;
-  const restaurant = result.restaurant;
-
-  document.querySelectorAll('[data-user]').forEach(element => {
-    element.textContent = user.name;
-  });
-
-  document.querySelectorAll('[data-restaurant]').forEach(element => {
-    element.textContent = restaurant.name;
-  });
-
-  document.querySelectorAll('#publicLink, #publicLinkTop').forEach(element => {
-    element.href = '/m/' + restaurant.slug;
-  });
-
-  const stats = await api('/api/stats');
-  const values = {
-    scans: stats.scans,
-    scans7: stats.scans7,
-    products: stats.products,
-    available: stats.available,
-    categories: stats.categories
-  };
-
-  Object.entries(values).forEach(([id, value]) => {
-    const element = document.getElementById(id);
-    if (element) element.textContent = value;
-  });
-
-  const chart = document.getElementById('scanChart');
-  if (!chart) return;
-
-  const daily = Array.isArray(stats.daily) ? stats.daily.slice(-14) : [];
-  if (!daily.length) {
-    chart.innerHTML = '<span class="muted">Pas encore de scans.</span>';
-    return;
-  }
-
-  const max = Math.max(1, ...daily.map(item => Number(item.count) || 0));
-  chart.innerHTML = daily.map(item => {
-    const height = Math.max(8, ((Number(item.count) || 0) / max) * 100);
-    return '<div class="bar-wrap" title="' + esc(item.day) + ': ' + item.count + ' scan(s)">' +
-      '<div class="bar" style="height:' + height + '%"></div>' +
-      '<small>' + esc(String(item.day).slice(8)) + '</small>' +
-      '</div>';
-  }).join('');
-}
-
-async function loadMenu() {
-  const categories = await api('/api/menu');
-  const root = document.getElementById('menuRoot');
-  if (!root) return;
-
-  let html = '<div class="menu-tools">' +
-    '<input id="menuSearch" class="input" placeholder="🔎 Rechercher un produit…" oninput="filterMenu(this.value)">' +
-    '<button class="btn light" onclick="addCategory()">+ Catégorie</button>' +
-    '<button class="btn green" onclick="addProduct()">+ Produit</button>' +
-    '</div>';
-
-  if (!categories.length) {
-    root.innerHTML = html + '<div class="empty">Aucune catégorie.<br><button class="btn green small" style="margin-top:12px" onclick="addCategory()">Créer ma première catégorie</button></div>';
-    return;
-  }
-
-  html += categories.map(category => {
-    const products = category.products || [];
-    return '<section class="card menu-category" data-category="' + category.id + '">' +
-      '<div class="category-head">' +
-        '<div><h2>' + esc(category.name) + '</h2><span class="muted category-count">' + products.length + ' produit' + (products.length > 1 ? 's' : '') + '</span></div>' +
-        '<div class="product-actions">' +
-          '<button class="btn light small" onclick="renameCategory(' + category.id + ', ' + JSON.stringify(category.name) + ')">✎</button>' +
-          '<button class="btn danger small" onclick="deleteCategory(' + category.id + ')">Supprimer</button>' +
-          '<button class="btn green small" onclick="addProduct(' + category.id + ')">+ Produit</button>' +
-        '</div>' +
-      '</div>' +
-      '<div class="products-list">' +
-        (products.length ? products.map(product => productHtml(product, category.id)).join('') : '<div class="empty">Cette catégorie est vide.</div>') +
-      '</div>' +
-    '</section>';
-  }).join('');
-
-  root.innerHTML = html;
-}
-
-function productHtml(product, categoryId) {
-  const data = JSON.stringify({
-    name: product.name,
-    description: product.description || '',
-    price: product.price,
-    image_url: product.image_url || '',
-    allergens: product.allergens || '',
-    tags: product.tags || '',
-    featured: Boolean(product.featured),
-    category_id: categoryId
-  }).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-
-  return '<article class="product" data-product data-name="' + esc((product.name + ' ' + (product.description || '')).toLowerCase()) + '">' +
-    (product.image_url ? '<img class="product-thumb" src="' + esc(product.image_url) + '" alt="">' : '') +
-    '<div style="min-width:0;flex:1">' +
-      '<div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">' +
-        '<strong>' + esc(product.name) + '</strong>' +
-        (product.featured ? '<span class="pill">⭐ Vedette</span>' : '') +
-      '</div>' +
-      '<div class="muted" style="margin:3px 0;font-size:13px">' + esc(product.description || 'Sans description') + '</div>' +
-      '<div><b>' + Number(product.price).toFixed(2) + ' €</b>' + (product.tags ? ' <span class="muted">· ' + esc(product.tags) + '</span>' : '') + '</div>' +
-    '</div>' +
-    '<div class="product-actions">' +
-      '<button class="btn ' + (product.available ? 'soft' : 'light') + ' small" onclick="toggleProduct(' + product.id + ',' + (product.available ? 0 : 1) + ')">' + (product.available ? '✓ En ligne' : '○ Masqué') + '</button>' +
-      '<button class="btn light small" onclick="editProduct(' + product.id + ', ' + data + ')">✎ Modifier</button>' +
-      '<button class="btn light small" onclick="duplicateProduct(' + product.id + ')">⧉</button>' +
-      '<button class="btn danger small" onclick="deleteProduct(' + product.id + ')">×</button>' +
-    '</div>' +
-  '</article>';
-}
-
-function filterMenu(query) {
-  const value = query.toLowerCase().trim();
-  document.querySelectorAll('[data-product]').forEach(product => {
-    product.style.display = !value || product.dataset.name.includes(value) ? 'flex' : 'none';
-  });
-}
-
-async function addCategory() {
-  const name = prompt('Nom de la catégorie');
-  if (!name || !name.trim()) return;
-  try {
-    await api('/api/categories', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
-    toast('Catégorie créée');
-    await loadMenu();
-  } catch (error) { toast(error.message); }
-}
-
-async function renameCategory(id, current) {
-  const name = prompt('Nouveau nom', current);
-  if (!name || !name.trim() || name === current) return;
-  try {
-    await api('/api/categories/' + id, { method: 'PATCH', body: JSON.stringify({ name: name.trim() }) });
-    toast('Catégorie renommée');
-    await loadMenu();
-  } catch (error) { toast(error.message); }
-}
-
-async function deleteCategory(id) {
-  if (!confirm('Supprimer cette catégorie et tous ses produits ?')) return;
-  try {
-    await api('/api/categories/' + id, { method: 'DELETE' });
-    toast('Catégorie supprimée');
-    await loadMenu();
-  } catch (error) { toast(error.message); }
-}
-
-async function addProduct(categoryId) {
-  try {
-    const categories = await api('/api/menu');
-    if (!categories.length) return toast('Créez d’abord une catégorie');
-    const category = categories.find(item => item.id === categoryId) || categories[0];
-    const name = prompt('Nom du produit');
-    if (!name || !name.trim()) return;
-    const price = prompt('Prix TTC (€)', '10.00');
-    if (price === null || Number.isNaN(Number(price))) return toast('Prix invalide');
-    const description = prompt('Description', '') || '';
-    const image_url = prompt('URL de l’image (optionnel)', '') || '';
-    const tags = prompt('Tags (ex: végétarien, épicé)', '') || '';
-    const allergens = prompt('Allergènes (optionnel)', '') || '';
-    const featured = confirm('Mettre ce produit en vedette ?');
-
-    await api('/api/products', {
-      method: 'POST',
-      body: JSON.stringify({ category_id: category.id, name: name.trim(), price: Number(price), description, image_url, tags, allergens, featured })
-    });
-    toast('Produit ajouté');
-    await loadMenu();
-  } catch (error) { toast(error.message); }
-}
-
-async function editProduct(id, product) {
-  const name = prompt('Nom', product.name);
-  if (!name || !name.trim()) return;
-  const price = prompt('Prix TTC (€)', product.price);
-  if (price === null || Number.isNaN(Number(price))) return toast('Prix invalide');
-  const description = prompt('Description', product.description) || '';
-  const image_url = prompt('URL image', product.image_url) || '';
-  const tags = prompt('Tags', product.tags) || '';
-  const allergens = prompt('Allergènes', product.allergens) || '';
-  const featured = confirm('Produit vedette ?');
-
-  try {
-    await api('/api/products/' + id, {
-      method: 'PATCH',
-      body: JSON.stringify({ name: name.trim(), price: Number(price), description, image_url, tags, allergens, featured })
-    });
-    toast('Produit modifié');
-    await loadMenu();
-  } catch (error) { toast(error.message); }
-}
-
-async function toggleProduct(id, available) {
-  try {
-    await api('/api/products/' + id, { method: 'PATCH', body: JSON.stringify({ available }) });
-    toast(available ? 'Produit publié' : 'Produit masqué');
-    await loadMenu();
-  } catch (error) { toast(error.message); }
-}
-
-async function duplicateProduct(id) {
-  try {
-    await api('/api/products/' + id + '/duplicate', { method: 'POST' });
-    toast('Produit dupliqué');
-    await loadMenu();
-  } catch (error) { toast(error.message); }
-}
-
-async function deleteProduct(id) {
-  if (!confirm('Supprimer définitivement ce produit ?')) return;
-  try {
-    await api('/api/products/' + id, { method: 'DELETE' });
-    toast('Produit supprimé');
-    await loadMenu();
-  } catch (error) { toast(error.message); }
-}
-
-async function loadQR() {
-  try {
-    const qr = await api('/api/qr');
-    const image = document.querySelector('#qrImage');
-    if (image) image.src = qr.data;
-    const target = document.querySelector('#qrTarget');
-    if (target) target.textContent = qr.target;
-    const download = document.querySelector('#qrDownload');
-    if (download) {
-      download.href = qr.data;
-      download.download = 'qrmenu.png';
-    }
-    const copy = document.querySelector('#copyQR');
-    if (copy) copy.onclick = async () => {
-      await navigator.clipboard.writeText(qr.target);
-      toast('Lien copié !');
-    };
-  } catch (error) { toast(error.message); }
-}
-
-async function saveSettings() {
-  const button = document.querySelector('#saveSettings');
-  if (button) {
-    button.disabled = true;
-    button.textContent = 'Enregistrement…';
-  }
-
-  try {
-    const ids = ['name', 'description', 'phone', 'address', 'logo_url', 'theme', 'accent_color', 'order_url', 'instagram', 'opening_hours'];
-    const data = {};
-    ids.forEach(id => {
-      const element = document.getElementById(id);
-      if (element) data[id] = element.value;
-    });
-    await api('/api/restaurant', { method: 'PATCH', body: JSON.stringify(data) });
-    toast('Paramètres enregistrés');
-  } catch (error) {
-    toast(error.message);
-  } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = 'Enregistrer les modifications';
-    }
-  }
-}
+async function dashboard(){const result=await loadMe(),user=result.user,restaurant=result.restaurant;document.querySelectorAll('[data-user]').forEach(e=>e.textContent=user.name);document.querySelectorAll('[data-restaurant]').forEach(e=>e.textContent=restaurant.name);document.querySelectorAll('#publicLink,#publicLinkTop').forEach(e=>e.href='/m/'+restaurant.slug);const stats=await api('/api/stats');Object.entries({scans:stats.scans,scans7:stats.scans7,products:stats.products,available:stats.available,categories:stats.categories}).forEach(([id,v])=>{const e=document.getElementById(id);if(e)e.textContent=v});const chart=document.getElementById('scanChart');if(!chart)return;const daily=Array.isArray(stats.daily)?stats.daily.slice(-14):[];if(!daily.length){chart.innerHTML='<span class="muted">Pas encore de scans.</span>';return}const max=Math.max(1,...daily.map(x=>Number(x.count)||0));chart.innerHTML=daily.map(x=>'<div class="bar-wrap" title="'+esc(x.day)+': '+x.count+' scan(s)"><div class="bar" style="height:'+Math.max(8,(Number(x.count)||0)/max*100)+'%"></div><small>'+esc(String(x.day).slice(8))+'</small></div>').join('');}
+async function loadMenu(){const categories=await api('/api/menu'),root=document.getElementById('menuRoot');if(!root)return;let html='<div class="menu-tools"><input id="menuSearch" class="input" placeholder="🔎 Rechercher un produit…" oninput="filterMenu(this.value)"><button class="btn light" onclick="addCategory()">+ Catégorie</button><button class="btn green" onclick="addProduct()">+ Produit</button></div>';if(!categories.length){root.innerHTML=html+'<div class="empty">Aucune catégorie.<br><button class="btn green small" style="margin-top:12px" onclick="addCategory()">Créer ma première catégorie</button></div>';return}html+=categories.map(c=>{const ps=c.products||[];return '<section class="card menu-category" data-category="'+c.id+'"><div class="category-head"><div><h2>'+esc(c.name)+'</h2><span class="muted category-count">'+ps.length+' produit'+(ps.length>1?'s':'')+'</span></div><div class="product-actions"><button class="btn light small" onclick="renameCategory('+c.id+', '+JSON.stringify(c.name)+')">✎</button><button class="btn danger small" onclick="deleteCategory('+c.id+')">Supprimer</button><button class="btn green small" onclick="addProduct('+c.id+')">+ Produit</button></div></div><div class="products-list">'+(ps.length?ps.map(p=>productHtml(p,c.id)).join(''):'<div class="empty">Cette catégorie est vide.</div>')+'</div></section>'}).join('');root.innerHTML=html;}
+function productHtml(p,categoryId){const data=encodeURIComponent(JSON.stringify({name:p.name,description:p.description||'',price:p.price,image_url:p.image_url||'',allergens:p.allergens||'',tags:p.tags||'',featured:Boolean(p.featured),category_id:categoryId}));return '<article class="product" data-product data-name="'+esc((p.name+' '+(p.description||'')).toLowerCase())+'">'+(p.image_url?'<img class="product-thumb" src="'+esc(p.image_url)+'" alt="">':'')+'<div style="min-width:0;flex:1"><div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap"><strong>'+esc(p.name)+'</strong>'+(p.featured?'<span class="pill">⭐ Vedette</span>':'')+'</div><div class="muted" style="margin:3px 0;font-size:13px">'+esc(p.description||'Sans description')+'</div><div><b>'+Number(p.price).toFixed(2)+' €</b>'+(p.tags?' <span class="muted">· '+esc(p.tags)+'</span>':'')+'</div></div><div class="product-actions"><button class="btn '+(p.available?'soft':'light')+' small" onclick="toggleProduct('+p.id+','+(p.available?0:1)+')">'+(p.available?'✓ En ligne':'○ Masqué')+'</button><button class="btn light small" onclick="editProduct('+p.id+', decodeURIComponent(\''+data+'\'))">✎ Modifier</button><button class="btn light small" onclick="duplicateProduct('+p.id+')">⧉</button><button class="btn danger small" onclick="deleteProduct('+p.id+')">×</button></div></article>';}
+function filterMenu(q){const v=q.toLowerCase().trim();document.querySelectorAll('[data-product]').forEach(e=>e.style.display=!v||e.dataset.name.includes(v)?'flex':'none');}
+async function addCategory(){const v=await modalForm('Nouvelle catégorie',[{key:'name',label:'Nom de la catégorie',placeholder:'Ex. Entrées'}],'Créer');if(!v?.name.trim())return;try{await api('/api/categories',{method:'POST',body:JSON.stringify({name:v.name.trim()})});toast('Catégorie créée');await loadMenu()}catch(e){toast(e.message)}}
+async function renameCategory(id,current){const v=await modalForm('Renommer la catégorie',[{key:'name',label:'Nom',value:current}]);if(!v?.name.trim()||v.name.trim()===current)return;try{await api('/api/categories/'+id,{method:'PATCH',body:JSON.stringify({name:v.name.trim()})});toast('Catégorie renommée');await loadMenu()}catch(e){toast(e.message)}}
+async function deleteCategory(id){if(!await modalConfirm('Supprimer la catégorie ?','Cette action supprimera aussi tous les produits de cette catégorie.'))return;try{await api('/api/categories/'+id,{method:'DELETE'});toast('Catégorie supprimée');await loadMenu()}catch(e){toast(e.message)}}
+async function addProduct(categoryId){try{const cats=await api('/api/menu');if(!cats.length)return toast('Créez d’abord une catégorie');const c=cats.find(x=>x.id===categoryId)||cats[0];const v=await modalForm('Nouveau produit',[{key:'name',label:'Nom',placeholder:'Ex. Burger maison'},{key:'price',label:'Prix TTC (€)',type:'number',value:'10.00'},{key:'description',label:'Description',placeholder:'Description du produit'},{key:'image_url',label:'URL de l’image',placeholder:'https://…'},{key:'tags',label:'Tags',placeholder:'végétarien, épicé'},{key:'allergens',label:'Allergènes',placeholder:'gluten, lait'},{key:'featured',label:'Produit vedette',type:'checkbox'}],'Ajouter');if(!v?.name.trim()||v.price===''||Number.isNaN(Number(v.price)))return toast('Nom ou prix invalide');await api('/api/products',{method:'POST',body:JSON.stringify({category_id:c.id,name:v.name.trim(),price:Number(v.price),description:v.description||'',image_url:v.image_url||'',tags:v.tags||'',allergens:v.allergens||'',featured:v.featured})});toast('Produit ajouté');await loadMenu()}catch(e){toast(e.message)}}
+async function editProduct(id,product){if(typeof product==='string')product=JSON.parse(product);const v=await modalForm('Modifier le produit',[{key:'name',label:'Nom',value:product.name},{key:'price',label:'Prix TTC (€)',type:'number',value:product.price},{key:'description',label:'Description',value:product.description},{key:'image_url',label:'URL image',value:product.image_url},{key:'tags',label:'Tags',value:product.tags},{key:'allergens',label:'Allergènes',value:product.allergens},{key:'featured',label:'Produit vedette',type:'checkbox',value:product.featured}]);if(!v?.name.trim()||v.price===''||Number.isNaN(Number(v.price)))return toast('Nom ou prix invalide');try{await api('/api/products/'+id,{method:'PATCH',body:JSON.stringify({name:v.name.trim(),price:Number(v.price),description:v.description||'',image_url:v.image_url||'',tags:v.tags||'',allergens:v.allergens||'',featured:v.featured?1:0})});toast('Produit modifié');await loadMenu()}catch(e){toast(e.message)}}
+async function toggleProduct(id,available){try{await api('/api/products/'+id,{method:'PATCH',body:JSON.stringify({available:Number(available)})});toast(Number(available)?'Produit publié':'Produit masqué');await loadMenu()}catch(e){toast(e.message)}}
+async function duplicateProduct(id){try{await api('/api/products/'+id+'/duplicate',{method:'POST'});toast('Produit dupliqué');await loadMenu()}catch(e){toast(e.message)}}
+async function deleteProduct(id){if(!await modalConfirm('Supprimer le produit ?','Ce produit sera définitivement supprimé.'))return;try{await api('/api/products/'+id,{method:'DELETE'});toast('Produit supprimé');await loadMenu()}catch(e){toast(e.message)}}
+async function loadQR(){try{const q=await api('/api/qr');const i=document.querySelector('#qrImage');if(i)i.src=q.data;const t=document.querySelector('#qrTarget');if(t)t.textContent=q.target;const d=document.querySelector('#qrDownload');if(d){d.href=q.data;d.download='qrmenu.png'}const c=document.querySelector('#copyQR');if(c)c.onclick=async()=>{await navigator.clipboard.writeText(q.target);toast('Lien copié !')}}catch(e){toast(e.message)}}
+async function saveSettings(){const b=document.querySelector('#saveSettings');if(b){b.disabled=true;b.textContent='Enregistrement…'}try{const ids=['name','description','phone','address','logo_url','theme','accent_color','order_url','instagram','opening_hours'],data={};ids.forEach(id=>{const e=document.getElementById(id);if(e)data[id]=e.value});await api('/api/restaurant',{method:'PATCH',body:JSON.stringify(data)});toast('Paramètres enregistrés')}catch(e){toast(e.message)}finally{if(b){b.disabled=false;b.textContent='Enregistrer les modifications'}}}
