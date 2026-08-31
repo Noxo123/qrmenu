@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const path = require('path');
 const QRCode = require('qrcode');
 const db = require('./db');
 
@@ -161,6 +162,8 @@ function registerFeatures(app, { BASE_URL, requireAuth }) {
     } catch (error) { next(error); }
   });
 
+  app.get('/feedback/:slug', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'feedback.html')));
+
   app.post('/api/public/feedback/:slug', (req, res) => {
     const restaurant = db.prepare('SELECT id FROM restaurants WHERE slug=?').get(req.params.slug);
     if (!restaurant) return res.status(404).json({ error: 'Restaurant introuvable.' });
@@ -190,13 +193,8 @@ function registerFeatures(app, { BASE_URL, requireAuth }) {
     res.json({ scans_by_hour: scansByHour, featured_products: featuredProducts, feedback, days });
   });
 
-  app.get('/manifest.webmanifest', (req, res) => {
-    res.type('application/manifest+json').send(JSON.stringify({ name: 'QRMenu', short_name: 'QRMenu', start_url: '/', display: 'standalone', background_color: '#ffffff', theme_color: '#19a463', icons: [] }));
-  });
-
-  app.get('/sw.js', (req, res) => {
-    res.type('application/javascript').send(`const CACHE='qrmenu-v1';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;const u=new URL(e.request.url);if(u.pathname.startsWith('/api/'))return;e.respondWith(caches.match(e.request).then(c=>c||fetch(e.request).then(r=>{const x=r.clone();caches.open(CACHE).then(cache=>cache.put(e.request,x));return r}).catch(()=>c)))})`);
-  });
+  app.get('/manifest.webmanifest', (req, res) => res.type('application/manifest+json').send(JSON.stringify({ name: 'QRMenu', short_name: 'QRMenu', start_url: '/', display: 'standalone', background_color: '#ffffff', theme_color: '#19a463', icons: [] })));
+  app.get('/sw.js', (req, res) => res.type('application/javascript').send(`const CACHE='qrmenu-v1';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;const u=new URL(e.request.url);if(u.pathname.startsWith('/api/'))return;e.respondWith(caches.match(e.request).then(c=>c||fetch(e.request).then(r=>{const x=r.clone();caches.open(CACHE).then(cache=>cache.put(e.request,x));return r}).catch(()=>c)))})`));
 }
 
 module.exports = { registerFeatures };
