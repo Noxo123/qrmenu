@@ -8,4 +8,19 @@ CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY AUTOINCREMENT, res
 CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER NOT NULL, name TEXT NOT NULL, description TEXT DEFAULT '', price REAL NOT NULL DEFAULT 0, image_url TEXT DEFAULT '', available INTEGER NOT NULL DEFAULT 1, position INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS scans (id INTEGER PRIMARY KEY AUTOINCREMENT, restaurant_id INTEGER NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(restaurant_id) REFERENCES restaurants(id) ON DELETE CASCADE);
 `);
+
+// Lightweight migrations for existing installations.
+const migrations = [
+  ['restaurants', 'ALTER TABLE restaurants ADD COLUMN accent_color TEXT DEFAULT \'#19a463\''],
+  ['restaurants', 'ALTER TABLE restaurants ADD COLUMN order_url TEXT DEFAULT \'\''],
+  ['restaurants', 'ALTER TABLE restaurants ADD COLUMN instagram TEXT DEFAULT \'\''],
+  ['restaurants', 'ALTER TABLE restaurants ADD COLUMN opening_hours TEXT DEFAULT \'\''],
+  ['products', 'ALTER TABLE products ADD COLUMN featured INTEGER NOT NULL DEFAULT 0'],
+  ['products', 'ALTER TABLE products ADD COLUMN allergens TEXT DEFAULT \'\''],
+  ['products', 'ALTER TABLE products ADD COLUMN tags TEXT DEFAULT \'\'']
+];
+for (const [, sql] of migrations) {
+  try { db.exec(sql); } catch (e) { if (!String(e.message).includes('duplicate column name')) throw e; }
+}
+
 module.exports = db;
