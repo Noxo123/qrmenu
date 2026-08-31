@@ -11,9 +11,7 @@ function buildOpenApi(baseUrl) {
     openapi: '3.0.3',
     info: { title: 'QRMenu API', version: '1.2.0', description: 'API QRMenu pour créer des restaurants, gérer des intégrations et récupérer des menus. Le plan gratuit inclut 1 token API et 500 requêtes par mois. Les tokens supplémentaires sont réservés aux abonnements payants.' },
     servers: [{ url: baseUrl, description: 'Serveur QRMenu actuel' }],
-    tags: [
-      { name: 'Health' }, { name: 'Restaurants' }, { name: 'Menu' }, { name: 'Categories' }, { name: 'Products' }, { name: 'Search' }, { name: 'Usage' }, { name: 'QR Codes' }
-    ],
+    tags: [{ name: 'Health' }, { name: 'Restaurants' }, { name: 'Menu' }, { name: 'Categories' }, { name: 'Products' }, { name: 'Search' }, { name: 'Usage' }],
     components: {
       securitySchemes: { BearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'API_TOKEN', description: 'Token qm_tok_... créé depuis le dashboard. Les anciennes clés qm_live_ restent compatibles.' } },
       schemas: {
@@ -23,9 +21,7 @@ function buildOpenApi(baseUrl) {
         Restaurant: { type: 'object', properties: { id: { type: 'integer' }, name: { type: 'string' }, slug: { type: 'string' }, description: { type: 'string' }, phone: { type: 'string' }, address: { type: 'string' }, logo_url: { type: 'string' }, theme: { type: 'string' }, accent_color: { type: 'string' }, order_url: { type: 'string' }, instagram: { type: 'string' }, opening_hours: { type: 'string' }, created_at: { type: 'string' } } },
         ApiResponse: success,
         CreateRestaurant: restaurantInput,
-        CreateRestaurantResponse: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', properties: { restaurant: { $ref: '#/components/schemas/Restaurant' }, default_category_id: { type: 'integer' }, menu_url: { type: 'string' } } } } },
-        Reorder: { type: 'object', required: ['ids'], properties: { ids: { type: 'array', items: { type: 'integer' } } } },
-        Feedback: { type: 'object', properties: { rating: { type: 'integer', minimum: 1, maximum: 5 }, comment: { type: 'string', maxLength: 1000 } } }
+        CreateRestaurantResponse: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', properties: { restaurant: { $ref: '#/components/schemas/Restaurant' }, default_category_id: { type: 'integer' }, menu_url: { type: 'string' } } } } }
       }
     },
     paths: {
@@ -40,8 +36,7 @@ function buildOpenApi(baseUrl) {
       '/api/v1/categories/{slug}': { get: { tags: ['Categories'], security: auth, summary: 'Catégories et produits', parameters: [slug], responses: { '200': response('Catégories', success), ...commonResponses } } },
       '/api/v1/products/{slug}': { get: { tags: ['Products'], security: auth, summary: 'Lister les produits disponibles', parameters: [slug], responses: { '200': response('Produits', success), ...commonResponses } } },
       '/api/v1/products/{slug}/{id}': { get: { tags: ['Products'], security: auth, summary: 'Récupérer un produit', parameters: [slug, idPath], responses: { '200': response('Produit', success), ...commonResponses } } },
-      '/api/v1/search/{slug}': { get: { tags: ['Search'], security: auth, summary: 'Rechercher dans le menu', parameters: [slug, { name: 'q', in: 'query', required: true, schema: { type: 'string', minLength: 1 }, example: 'pizza' }], responses: { '200': response('Résultats', success), '400': response('Paramètre q manquant', error), ...commonResponses } } },
-      '/api/v1/qr-codes': { get: { tags: ['QR Codes'], security: auth, summary: 'Lister les QR codes du restaurant', responses: { '200': response('QR codes', success), ...commonResponses } }, post: { tags: ['QR Codes'], security: auth, summary: 'Créer un QR code personnalisé', requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' } } } } } }, responses: { '201': response('QR créé', success), ...commonResponses } } }
+      '/api/v1/search/{slug}': { get: { tags: ['Search'], security: auth, summary: 'Rechercher dans le menu', parameters: [slug, { name: 'q', in: 'query', required: true, schema: { type: 'string', minLength: 1 }, example: 'pizza' }], responses: { '200': response('Résultats', success), '400': response('Paramètre q manquant', error), ...commonResponses } } }
     }
   };
 }
