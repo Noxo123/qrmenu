@@ -3,6 +3,7 @@ const Database = require('better-sqlite3');
 const db = new Database(process.env.DB_PATH || './database.sqlite');
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+db.pragma('busy_timeout = 5000');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -66,4 +67,16 @@ for (const [table, column, sql] of migrations) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();
   if (!columns.some(c => c.name === column)) db.exec(sql);
 }
+
+const indexes = [
+  'CREATE INDEX IF NOT EXISTS idx_restaurants_user_id ON restaurants(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_categories_restaurant_position ON categories(restaurant_id, position)',
+  'CREATE INDEX IF NOT EXISTS idx_products_category_position ON products(category_id, position)',
+  'CREATE INDEX IF NOT EXISTS idx_products_category_available ON products(category_id, available)',
+  'CREATE INDEX IF NOT EXISTS idx_scans_restaurant_created ON scans(restaurant_id, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_api_keys_restaurant ON api_keys(restaurant_id)',
+  'CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)'
+];
+for (const sql of indexes) db.exec(sql);
+
 module.exports = db;
