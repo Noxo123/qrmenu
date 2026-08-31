@@ -1,11 +1,14 @@
 {
   "name": "qrmenu",
-  "version": "1.1.0",
-  "description": "QRMenu - digital menus and smart QR codes for businesses",
+  "version": "1.2.0",
+  "description": "QRMenu - digital menus, QR codes and API provisioning for businesses",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
