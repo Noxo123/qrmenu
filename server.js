@@ -9,6 +9,7 @@ const cors = require('cors');
 const { rateLimit } = require('express-rate-limit');
 const db = require('./src/db');
 const { buildOpenApi } = require('./src/openapi');
+const { createToken, authenticateToken, consumeQuota, usage, getPlan } = require('./src/api-tokens');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -31,12 +32,7 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'qrmenu-dev-secret-change-me',
   resave: false,
   saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: IS_PRODUCTION,
-    maxAge: 1000 * 60 * 60 * 24 * 7
-  }
+  cookie: { httpOnly: true, sameSite: 'lax', secure: IS_PRODUCTION, maxAge: 1000 * 60 * 60 * 24 * 7 }
 }));
 app.use('/assets', express.static(path.join(__dirname, 'public'), { maxAge: IS_PRODUCTION ? '1d' : 0 }));
 
@@ -59,8 +55,16 @@ function slugify(value) {
   return String(value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
 }
 
+function uniqueSlug(name, requestedSlug) {
+  const base = slugify(requestedSlug || name) || 'restaurant';
+  let slug = base;
+  let i = 1;
+  while (db.prepare('SELECT id FROM restaurants WHERE slug=?').get(slug)) slug = `${base}-${i++}`;
+  return slug;
+}
+
 function myRestaurant(req) {
-  return db.prepare('SELECT * FROM restaurants WHERE user_id=?').get(req.session.userId);
+  return db.prepare('SELECT * FROM restaurants WHERE user_id=? ORDER BY id LIMIT 1').get(req.session.userId);
 }
 
 function ownedCategory(req, id) {
@@ -120,9 +124,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res, next) => {
     if (db.prepare('SELECT id FROM users WHERE email=?').get(email)) return res.status(409).json({ error: 'Cet email est déjà utilisé.' });
     const create = db.transaction(() => {
       const user = db.prepare('INSERT INTO users(name,email,password_hash) VALUES(?,?,?)').run(name, email, bcrypt.hashSync(password, 12));
-      const base = slugify(restaurantName) || 'restaurant';
-      let slug = base; let i = 1;
-      while (db.prepare('SELECT id FROM restaurants WHERE slug=?').get(slug)) slug = `${base}-${i++}`;
+      const slug = uniqueSlug(restaurantName);
       const restaurant = db.prepare('INSERT INTO restaurants(user_id,name,slug) VALUES(?,?,?)').run(user.lastInsertRowid, restaurantName, slug);
       db.prepare('INSERT INTO categories(restaurant_id,name,position) VALUES(?,?,0)').run(restaurant.lastInsertRowid, 'Nos produits');
       return Number(user.lastInsertRowid);
@@ -150,7 +152,8 @@ app.post('/api/auth/logout', (req, res) => req.session.destroy(() => res.redirec
 // Dashboard API
 app.get('/api/me', requireAuth, (req, res) => {
   const restaurant = myRestaurant(req);
-  res.json({ user: db.prepare('SELECT id,name,email,created_at FROM users WHERE id=?').get(req.session.userId), restaurant });
+  const user = db.prepare('SELECT id,name,email,subscription_plan,created_at FROM users WHERE id=?').get(req.session.userId);
+  res.json({ user, restaurant });
 });
 
 app.get('/api/menu', requireAuth, (req, res) => {
@@ -165,6 +168,7 @@ app.get('/api/menu', requireAuth, (req, res) => {
 app.post('/api/categories', requireAuth, (req, res) => {
   const restaurant = myRestaurant(req);
   const name = String(req.body.name || '').trim();
+  if (!restaurant) return res.status(404).json({ error: 'Restaurant introuvable.' });
   if (!name) return res.status(400).json({ error: 'Nom requis' });
   if (name.length > 100) return res.status(422).json({ error: 'Nom trop long.' });
   const x = db.prepare('INSERT INTO categories(restaurant_id,name,position) VALUES(?,?,COALESCE((SELECT MAX(position)+1 FROM categories WHERE restaurant_id=?),0))').run(restaurant.id, name, restaurant.id);
@@ -190,10 +194,10 @@ app.delete('/api/categories/:id', requireAuth, (req, res) => {
 app.post('/api/products', requireAuth, (req, res) => {
   const restaurant = myRestaurant(req);
   const categoryId = Number(req.body.category_id);
-  const category = db.prepare('SELECT id FROM categories WHERE id=? AND restaurant_id=?').get(categoryId, restaurant.id);
+  const category = restaurant ? db.prepare('SELECT id FROM categories WHERE id=? AND restaurant_id=?').get(categoryId, restaurant.id) : null;
   const name = String(req.body.name || '').trim();
   const price = Number(req.body.price);
-  if (!category) return res.status(404).json({ error: 'Catégorie introuvable' });
+  if (!restaurant || !category) return res.status(404).json({ error: 'Catégorie introuvable' });
   if (!name) return res.status(422).json({ error: 'Nom requis.' });
   if (!Number.isFinite(price) || price < 0) return res.status(422).json({ error: 'Prix invalide.' });
   const position = db.prepare('SELECT COALESCE(MAX(position)+1,0) p FROM products WHERE category_id=?').get(category.id).p;
@@ -236,6 +240,7 @@ app.delete('/api/products/:id', requireAuth, (req, res) => {
 
 app.patch('/api/restaurant', requireAuth, (req, res) => {
   const restaurant = myRestaurant(req);
+  if (!restaurant) return res.status(404).json({ error: 'Restaurant introuvable.' });
   const fields = ['name', 'description', 'phone', 'address', 'logo_url', 'theme', 'accent_color', 'order_url', 'instagram', 'opening_hours'];
   const used = fields.filter(key => req.body[key] !== undefined);
   if (req.body.name !== undefined && !String(req.body.name).trim()) return res.status(422).json({ error: 'Le nom est requis.' });
@@ -246,6 +251,7 @@ app.patch('/api/restaurant', requireAuth, (req, res) => {
 app.get('/api/qr', requireAuth, async (req, res, next) => {
   try {
     const restaurant = myRestaurant(req);
+    if (!restaurant) return res.status(404).json({ error: 'Restaurant introuvable.' });
     const target = `${BASE_URL}/m/${restaurant.slug}`;
     const data = await QRCode.toDataURL(target, { width: 800, margin: 2 });
     const svg = await QRCode.toString(target, { type: 'svg', width: 800, margin: 2 });
@@ -256,6 +262,7 @@ app.get('/q/:code', (req, res) => res.redirect(`/m/${encodeURIComponent(req.para
 
 app.get('/api/stats', requireAuth, (req, res) => {
   const restaurant = myRestaurant(req);
+  if (!restaurant) return res.status(404).json({ error: 'Restaurant introuvable.' });
   const scans30 = db.prepare("SELECT COUNT(*) count FROM scans WHERE restaurant_id=? AND created_at>=datetime('now','-30 day')").get(restaurant.id).count;
   const scans7 = db.prepare("SELECT COUNT(*) count FROM scans WHERE restaurant_id=? AND created_at>=datetime('now','-7 day')").get(restaurant.id).count;
   const products = db.prepare('SELECT COUNT(*) count FROM products p JOIN categories c ON c.id=p.category_id WHERE c.restaurant_id=?').get(restaurant.id).count;
@@ -280,29 +287,96 @@ app.get('/api/public/menu/:slug', (req, res) => {
 
 // API v1
 app.use('/api/v1', apiLimiter);
-app.get('/api/v1/health', (req, res) => res.json({ success: true, data: { status: 'ok', version: '1.0.0', timestamp: new Date().toISOString() } }));
+app.get('/api/v1/health', (req, res) => res.json({ success: true, data: { status: 'ok', version: '1.1.0', timestamp: new Date().toISOString() } }));
 
-function apiKeyAuth(req, res, next) {
+function apiTokenAuth(req, res, next) {
   const header = req.get('authorization') || '';
-  const key = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-  if (!key) return jsonError(res, 401, 'AUTH_REQUIRED', 'Authorization: Bearer <API_KEY> est requis.');
-  const hash = crypto.createHash('sha256').update(key).digest('hex');
-  const record = db.prepare('SELECT * FROM api_keys WHERE key_hash=? AND revoked_at IS NULL').get(hash);
-  if (!record) return jsonError(res, 401, 'INVALID_API_KEY', 'Clé API invalide ou révoquée.');
-  db.prepare('UPDATE api_keys SET last_used_at=CURRENT_TIMESTAMP WHERE id=?').run(record.id);
-  req.apiKey = record;
+  const raw = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  if (!raw) return jsonError(res, 401, 'AUTH_REQUIRED', 'Authorization: Bearer <API_TOKEN> est requis.');
+
+  if (raw.startsWith('qm_tok_')) {
+    const token = authenticateToken(raw);
+    if (!token) return jsonError(res, 401, 'INVALID_TOKEN', 'Token API invalide ou révoqué.');
+    const quota = consumeQuota(token);
+    if (!quota.ok && quota.reason === 'quota') {
+      res.set('X-RateLimit-Limit', String(quota.limit));
+      res.set('X-RateLimit-Remaining', '0');
+      res.set('X-RateLimit-Reset', quota.reset);
+      return jsonError(res, 429, 'QUOTA_EXCEEDED', `Quota mensuel atteint (${quota.limit} requêtes).`, { limit: quota.limit, used: quota.used, reset_at: quota.reset });
+    }
+    if (!quota.ok) return jsonError(res, 401, 'INVALID_TOKEN', 'Token API invalide ou révoqué.');
+    res.set('X-RateLimit-Limit', String(quota.limit));
+    res.set('X-RateLimit-Remaining', String(quota.remaining));
+    res.set('X-RateLimit-Reset', quota.reset);
+    req.apiAuth = { type: 'token', userId: token.user_id, token };
+    return next();
+  }
+
+  // Backward compatibility with the existing restaurant-scoped qm_live_ keys.
+  const hash = crypto.createHash('sha256').update(raw).digest('hex');
+  const legacy = db.prepare('SELECT * FROM api_keys WHERE key_hash=? AND revoked_at IS NULL').get(hash);
+  if (!legacy) return jsonError(res, 401, 'INVALID_API_KEY', 'Clé API invalide ou révoquée.');
+  db.prepare('UPDATE api_keys SET last_used_at=CURRENT_TIMESTAMP WHERE id=?').run(legacy.id);
+  req.apiAuth = { type: 'legacy', restaurantId: legacy.restaurant_id, key: legacy };
   next();
 }
 
 function apiWrap(data) { return { success: true, data }; }
+
 function loadApiMenu(req, res) {
   const data = publicMenu(req.params.slug);
   if (!data) { jsonError(res, 404, 'NOT_FOUND', 'Restaurant introuvable.'); return null; }
-  if (data.restaurant.id !== req.apiKey.restaurant_id) { jsonError(res, 403, 'FORBIDDEN', 'Cette clé ne peut pas accéder à ce restaurant.'); return null; }
+  if (req.apiAuth.type === 'token') {
+    const owner = db.prepare('SELECT id FROM restaurants WHERE id=? AND user_id=?').get(data.restaurant.id, req.apiAuth.userId);
+    if (!owner) { jsonError(res, 403, 'FORBIDDEN', 'Ce token ne peut pas accéder à ce restaurant.'); return null; }
+  } else if (data.restaurant.id !== req.apiAuth.restaurantId) {
+    jsonError(res, 403, 'FORBIDDEN', 'Cette clé ne peut pas accéder à ce restaurant.');
+    return null;
+  }
   return data;
 }
 
-app.use('/api/v1', apiKeyAuth);
+app.use('/api/v1', apiTokenAuth);
+
+app.get('/api/v1/restaurants', (req, res) => {
+  if (req.apiAuth.type !== 'token') return jsonError(res, 403, 'TOKEN_REQUIRED', 'Cette route nécessite un token qm_tok_.');
+  const restaurants = db.prepare('SELECT id,name,slug,description,phone,address,logo_url,theme,accent_color,order_url,instagram,opening_hours,created_at FROM restaurants WHERE user_id=? ORDER BY id').all(req.apiAuth.userId);
+  res.json(apiWrap(restaurants));
+});
+
+app.post('/api/v1/restaurants', (req, res, next) => {
+  if (req.apiAuth.type !== 'token') return jsonError(res, 403, 'TOKEN_REQUIRED', 'La création de restaurants nécessite un token qm_tok_.');
+  try {
+    const name = String(req.body.name || '').trim();
+    if (!name) return jsonError(res, 422, 'VALIDATION_ERROR', 'Le champ name est obligatoire.');
+    if (name.length > 120) return jsonError(res, 422, 'VALIDATION_ERROR', 'Le nom ne peut pas dépasser 120 caractères.');
+    const slug = uniqueSlug(name, req.body.slug);
+    const fields = {
+      description: String(req.body.description || '').trim(),
+      phone: String(req.body.phone || '').trim(),
+      address: String(req.body.address || '').trim(),
+      logo_url: String(req.body.logo_url || '').trim(),
+      theme: String(req.body.theme || 'light').trim(),
+      accent_color: String(req.body.accent_color || '#19a463').trim(),
+      order_url: String(req.body.order_url || '').trim(),
+      instagram: String(req.body.instagram || '').trim(),
+      opening_hours: String(req.body.opening_hours || '').trim()
+    };
+    const create = db.transaction(() => {
+      const restaurant = db.prepare(`INSERT INTO restaurants(user_id,name,slug,description,phone,address,logo_url,theme,accent_color,order_url,instagram,opening_hours) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(req.apiAuth.userId, name, slug, fields.description, fields.phone, fields.address, fields.logo_url, fields.theme, fields.accent_color, fields.order_url, fields.instagram, fields.opening_hours);
+      const category = db.prepare('INSERT INTO categories(restaurant_id,name,position) VALUES(?,?,0)').run(restaurant.lastInsertRowid, 'Nos produits');
+      return { id: Number(restaurant.lastInsertRowid), category_id: Number(category.lastInsertRowid) };
+    });
+    const created = db.prepare('SELECT id,name,slug,description,phone,address,logo_url,theme,accent_color,order_url,instagram,opening_hours,created_at FROM restaurants WHERE id=?').get(create.id);
+    res.status(201).json(apiWrap({ restaurant: created, default_category_id: create.category_id, menu_url: `${BASE_URL}/m/${created.slug}` }));
+  } catch (error) { next(error); }
+});
+
+app.get('/api/v1/usage', (req, res) => {
+  if (req.apiAuth.type !== 'token') return jsonError(res, 403, 'TOKEN_REQUIRED', 'Cette route nécessite un token qm_tok_.');
+  res.json(apiWrap(usage(req.apiAuth.userId)));
+});
+
 app.get('/api/v1/menu/:slug', (req, res) => { const data = loadApiMenu(req, res); if (data) res.json(apiWrap(data)); });
 app.get('/api/v1/restaurants/:slug', (req, res) => { const data = loadApiMenu(req, res); if (data) res.json(apiWrap(data.restaurant)); });
 app.get('/api/v1/categories/:slug', (req, res) => { const data = loadApiMenu(req, res); if (data) res.json(apiWrap(data.categories)); });
@@ -328,7 +402,21 @@ app.get('/api/v1/search/:slug', (req, res) => {
   res.json(apiWrap({ query, count: products.length, products }));
 });
 
-// API key management
+// Developer token management. Free = 1 token / 500 requests per month.
+app.get('/api/developer/tokens', requireAuth, (req, res) => res.json(usage(req.session.userId)));
+app.get('/api/developer/usage', requireAuth, (req, res) => res.json(usage(req.session.userId)));
+app.post('/api/developer/tokens', requireAuth, (req, res, next) => {
+  try { res.status(201).json(createToken(req.session.userId, req.body.name)); }
+  catch (error) { next(error); }
+});
+app.delete('/api/developer/tokens/:id', requireAuth, (req, res) => {
+  const token = db.prepare('SELECT id FROM api_tokens WHERE id=? AND user_id=? AND revoked_at IS NULL').get(req.params.id, req.session.userId);
+  if (!token) return res.status(404).json({ error: 'Token introuvable.' });
+  db.prepare('UPDATE api_tokens SET revoked_at=CURRENT_TIMESTAMP WHERE id=?').run(token.id);
+  res.json({ ok: true });
+});
+
+// Legacy restaurant-scoped keys remain available for compatibility.
 app.get('/api/developer/keys', requireAuth, (req, res) => {
   const restaurant = myRestaurant(req);
   res.json(db.prepare('SELECT id,name,key_prefix,last_used_at,created_at,revoked_at FROM api_keys WHERE restaurant_id=? ORDER BY id DESC').all(restaurant.id));
@@ -340,13 +428,13 @@ app.post('/api/developer/keys', requireAuth, (req, res) => {
   const hash = crypto.createHash('sha256').update(raw).digest('hex');
   const prefix = raw.slice(0, 16);
   const x = db.prepare('INSERT INTO api_keys(restaurant_id,name,key_hash,key_prefix) VALUES(?,?,?,?)').run(restaurant.id, name, hash, prefix);
-  res.status(201).json({ id: Number(x.lastInsertRowid), name, key: raw, key_prefix: prefix, warning: 'Cette clé ne sera plus affichée. Copiez-la maintenant.' });
+  res.status(201).json({ id: Number(x.lastInsertRowid), name, key: raw, key_prefix: prefix, warning: 'Cette clé ne sera plus affichée. Utilisez plutôt les tokens qm_tok_ pour la nouvelle API.' });
 });
 app.delete('/api/developer/keys/:id', requireAuth, (req, res) => {
   const restaurant = myRestaurant(req);
   const key = db.prepare('SELECT id FROM api_keys WHERE id=? AND restaurant_id=?').get(req.params.id, restaurant.id);
   if (!key) return res.status(404).json({ error: 'Clé introuvable.' });
-  db.prepare("UPDATE api_keys SET revoked_at=CURRENT_TIMESTAMP WHERE id=?").run(key.id);
+  db.prepare('UPDATE api_keys SET revoked_at=CURRENT_TIMESTAMP WHERE id=?').run(key.id);
   res.json({ ok: true });
 });
 
@@ -359,7 +447,7 @@ app.use((req, res, next) => {
 app.use((error, req, res, next) => {
   console.error(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`, error);
   if (res.headersSent) return next(error);
-  if (req.path.startsWith('/api/')) return jsonError(res, error.status || 500, 'INTERNAL_ERROR', IS_PRODUCTION ? 'Une erreur interne est survenue.' : error.message);
+  if (req.path.startsWith('/api/')) return jsonError(res, error.status || 500, error.code || 'INTERNAL_ERROR', IS_PRODUCTION ? 'Une erreur interne est survenue.' : error.message);
   res.status(error.status || 500).send(IS_PRODUCTION ? 'Une erreur est survenue.' : `<h1>Erreur ${error.status || 500}</h1><p>${String(error.message || 'Erreur interne')}</p>`);
 });
 
