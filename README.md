@@ -12,12 +12,99 @@ SaaS de menus numériques et QR codes pour restaurants, snacks, cafés, food-tru
 - `/dashboard/menu` — éditeur de menu
 - `/dashboard/qr` — QR code
 - `/dashboard/settings` — paramètres du restaurant
-- `/dashboard/developer` — clés API et intégrations
+- `/dashboard/developer` — tokens API et intégrations
 - `/m/:slug` — menu public
 - `/api-docs` — Swagger UI
 - `/api-docs/openapi.json` — spécification OpenAPI 3.0.3
 
+### API publique v1
+
+`GET /api/v1/health` est public. Les autres routes utilisent un token :
+
+```http
+Authorization: Bearer qm_tok_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Le plan gratuit inclut **1 token par utilisateur et 500 requêtes par mois**. Le token est stocké uniquement sous forme de hash. Les tokens supplémentaires sont réservés aux abonnements payants.
+
+#### Gestion du compte API
+
+```text
+GET  /api/v1/usage
+GET  /api/v1/restaurants
+POST /api/v1/restaurants
+```
+
+`POST /api/v1/restaurants` permet de provisionner un nouveau restaurant directement depuis une autre application.
+
+Exemple :
+
+```bash
+curl -X POST http://localhost:3000/api/v1/restaurants ^
+  -H "Authorization: Bearer qm_tok_VOTRE_TOKEN" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"name\":\"Chez Marius\",\"slug\":\"chez-marius\",\"description\":\"Cuisine maison\"}"
+```
+
+Réponse :
+
+```json
+{
+  "success": true,
+  "data": {
+    "restaurant": {
+      "id": 2,
+      "name": "Chez Marius",
+      "slug": "chez-marius"
+    },
+    "default_category_id": 4,
+    "menu_url": "http://localhost:3000/m/chez-marius"
+  }
+}
+```
+
+Autres endpoints :
+
+```text
+GET /api/v1/menu/:slug
+GET /api/v1/restaurants/:slug
+GET /api/v1/categories/:slug
+GET /api/v1/products/:slug
+GET /api/v1/products/:slug/:id
+GET /api/v1/search/:slug?q=...
+```
+
+Les tokens renvoient les en-têtes de quota :
+
+```text
+X-RateLimit-Limit
+X-RateLimit-Remaining
+X-RateLimit-Reset
+```
+
+Quand les 500 requêtes mensuelles sont consommées : `429 QUOTA_EXCEEDED`.
+
+### Tokens du dashboard
+
+```text
+GET    /api/developer/tokens
+GET    /api/developer/usage
+POST   /api/developer/tokens
+DELETE /api/developer/tokens/:id
+```
+
+Création d'un token :
+
+```json
+{
+  "name": "Mon application"
+}
+```
+
+Le token complet est affiché une seule fois.
+
 ### API interne du dashboard
+
 - `POST /api/auth/register`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
@@ -29,22 +116,9 @@ SaaS de menus numériques et QR codes pour restaurants, snacks, cafés, food-tru
 - `GET /api/qr`
 - `GET /api/stats`
 
-### API publique v1
-- `GET /api/v1/health` — public
-- `GET /api/v1/menu/:slug`
-- `GET /api/v1/restaurants/:slug`
-- `GET /api/v1/categories/:slug`
-- `GET /api/v1/products/:slug`
-- `GET /api/v1/products/:slug/:id`
-- `GET /api/v1/search/:slug?q=...`
+### Compatibilité legacy
 
-Toutes les routes v1 sauf `health` utilisent :
-
-```http
-Authorization: Bearer qm_live_xxxxxxxxx
-```
-
-Les clés sont hashées en SHA-256 et ne sont jamais stockées en clair.
+Les anciennes clés `qm_live_...` restent compatibles avec les endpoints de lecture existants, mais les nouvelles intégrations doivent utiliser `qm_tok_...`.
 
 ## Installation
 
@@ -80,11 +154,12 @@ REGISTER_RATE_LIMIT=5
 - Helmet
 - CORS configurable
 - rate limiting pour authentification et API v1
+- quota mensuel par token
 - cookies de session `httpOnly` / `sameSite=lax`
 - `secure` automatiquement activé en production
 - bcrypt pour les mots de passe
-- clés API stockées sous forme de hash
-- contrôle d'appartenance restaurant sur les ressources du dashboard
+- tokens API stockés sous forme de hash SHA-256
+- contrôle d'appartenance restaurant pour les ressources du dashboard et de l'API
 - requêtes SQLite paramétrées
 - gestion JSON des erreurs API
 - index SQLite pour les requêtes fréquentes
@@ -100,6 +175,7 @@ Avant une mise en production complète, prévoir notamment :
 - stockage objet/CDN pour les images
 - sauvegardes SQLite automatisées si SQLite reste utilisé
 - monitoring et alerting
+- intégration Stripe ou autre prestataire pour activer automatiquement les plans payants
 - politique de confidentialité et conservation minimale des données
 
 ## Tests CI
@@ -107,7 +183,7 @@ Avant une mise en production complète, prévoir notamment :
 GitHub Actions vérifie automatiquement :
 
 - installation npm
-- syntaxe de `server.js`, `src/db.js` et `src/openapi.js`
+- syntaxe de `server.js`, `src/db.js`, `src/openapi.js` et `src/api-tokens.js`
 - démarrage du serveur
 - `/api/v1/health`
 - `/api-docs`
