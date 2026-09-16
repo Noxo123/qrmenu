@@ -1,0 +1,22 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: node --check server.js
+      - run: node --check src/db.js
+      - run: node --check src/openapi.js
+      - run: node --check src/api-tokens.js
